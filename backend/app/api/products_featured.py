@@ -1,97 +1,102 @@
-To implement the functionality for displaying featured products on the homepage, we will create an API endpoint that fetches featured products from the database. 
-
-First, let's define our database model for the product and the Pydantic model for the product.
+Sure, let's start by defining our Pydantic models and the database model.
 
 ```python
+from pydantic import BaseModel
+from typing import Optional, List
 from sqlalchemy import Boolean, Column, ForeignKey, Integer, String
 from sqlalchemy.orm import relationship
-from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel
-from typing import List
-from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.future import select
 
-# Database Model
-class Product(BaseModel):
-    id: int
-    name: str
-    description: str
-    price: float
-    is_featured: bool
+# SQLAlchemy model
+class Product(Base):
+    __tablename__ = "products"
 
-app = FastAPI()
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String, unique=True, index=True)
+    description = Column(String, index=True)
+    price = Column(Float, index=True)
+    is_featured = Column(Boolean, default=False)
 
-# Pydantic Models
+# Pydantic models
 class ProductBase(BaseModel):
     name: str
-    description: str
+    description: Optional[str] = None
     price: float
+    is_featured: bool = False
 
 class ProductCreate(ProductBase):
-    is_featured: bool = False
+    pass
 
 class Product(ProductBase):
     id: int
-    is_featured: bool
 
     class Config:
         orm_mode = True
 ```
-Now, let's create a service layer to handle the database operations.
+
+Next, let's define our service layer code.
 
 ```python
-# Service Layer
-class ProductService:
-    def __init__(self, session: AsyncSession):
-        self.session = session
+from sqlalchemy.orm import Session
+import models
 
-    async def get_featured_products(self) -> List[Product]:
-        result = await self.session.execute(select(Product).where(Product.is_featured == True))
-        return result.scalars().all()
+def get_featured_products(db: Session):
+    return db.query(models.Product).filter(models.Product.is_featured == True).all()
+
+def search_products(db: Session, keyword: str):
+    return db.query(models.Product).filter(models.Product.name.contains(keyword)).all()
 ```
 
-Now, let's create our API endpoint for retrieving the featured products.
+Then, we can create the FastAPI endpoints:
 
 ```python
-from fastapi import Depends
-from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import sessionmaker
+from fastapi import FastAPI, Depends, HTTPException, status
+from sqlalchemy.orm import Session
+from typing import List
+from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
+import crud, models, schemas
+from database import SessionLocal, engine
+
+app = FastAPI()
 
 # Dependency
 def get_db():
-    session = sessionmaker(autocommit=False, autoflush=False, bind=engine)
-    async_session = session()
+    db = SessionLocal()
     try:
-        yield async_session
+        yield db
     finally:
-        await async_session.close()
+        db.close()
 
-@app.get("/products/featured", response_model=List[Product])
-async def get_featured_products(session: AsyncSession = Depends(get_db)):
+@app.get("/products/featured", response_model=List[schemas.Product])
+def read_featured_products(skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
     """
-    Retrieve featured products
+    Fetch the featured products from the database
     """
-    product_service = ProductService(session)
-    products = await product_service.get_featured_products()
-    if not products:
-        raise HTTPException(status_code=404, detail="Featured products not found")
+    products = crud.get_featured_products(db=db)
+    return products
+
+@app.get("/products/search/{keyword}", response_model=List[schemas.Product])
+def search_products(keyword: str, db: Session = Depends(get_db)):
+    """
+    Search for products by keyword
+    """
+    products = crud.search_products(db=db, keyword=keyword)
     return products
 ```
 
-And finally, let's create a test case for our API endpoint.
+Finally, let's implement some simple unit tests for these endpoints:
 
 ```python
 from fastapi.testclient import TestClient
-from main import app
-from unittest.mock import patch
 
-client = TestClient(app)
-
-def test_get_featured_products():
+def test_read_featured_products():
     response = client.get("/products/featured")
     assert response.status_code == 200
-    assert "application/json" in response.headers["Content-Type"]
-    assert isinstance(response.json(), list)
+    assert "products" in response.json()
+
+def test_search_products():
+    response = client.get("/products/search/test")
+    assert response.status_code == 200
+    assert "products" in response.json()
 ```
 
-Note: For simplicity, the example above doesn't include the setup code for the SQLAlchemy ORM or async engine, and assumes that these are created elsewhere in your application. Please ensure to setup your database connection and session properly.
+Note: This example assumes the existence of a `crud` module where the service layer code resides and a `schemas` module where the Pydantic models are defined. The `SessionLocal` and `engine` are assumed to be part of a `database` module.
