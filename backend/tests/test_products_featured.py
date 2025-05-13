@@ -1,66 +1,54 @@
-Here are the unit tests for the FastAPI endpoint:
+In order to test success cases, error cases, data validation, and edge cases, we need to make a few changes to our endpoint code to add error handling and validation. Let's add a check to make sure the keyword provided for the search is not empty and that the number of products requested is within a reasonable range:
 
 ```python
-from fastapi.testclient import TestClient
-from main import app, Product, ProductService
-from unittest.mock import patch
-import pytest
+@app.get("/products/featured", response_model=List[schemas.Product])
+def read_featured_products(skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
+    if limit < 1 or limit > 100:
+        raise HTTPException(status_code=400, detail="Invalid number of products requested")
+    products = crud.get_featured_products(db=db)
+    return products
 
-client = TestClient(app)
-
-# Test data
-test_products = [
-    Product(id=1, name="product1", description="desc1", price=100.0, is_featured=True),
-    Product(id=2, name="product2", description="desc2", price=200.0, is_featured=True),
-]
-test_product_service = ProductService()
-
-
-# Success Case
-@patch.object(test_product_service, "get_featured_products")
-def test_get_featured_products_success(mock_get_featured_products):
-    mock_get_featured_products.return_value = test_products
-
-    response = client.get("/products/featured")
-    assert response.status_code == 200
-    assert "application/json" in response.headers["Content-Type"]
-    assert isinstance(response.json(), list)
-    assert len(response.json()) == len(test_products)
-    for product in response.json():
-        assert 'id' in product
-        assert 'name' in product
-        assert 'description' in product
-        assert 'price' in product
-        assert 'is_featured' in product
-
-# Error Case
-@patch.object(test_product_service, "get_featured_products")
-def test_get_featured_products_not_found(mock_get_featured_products):
-    mock_get_featured_products.return_value = []
-
-    response = client.get("/products/featured")
-    assert response.status_code == 404
-    assert response.json() == {"detail": "Featured products not found"}
-
-# Edge Case
-@patch.object(test_product_service, "get_featured_products")
-def test_get_featured_products_empty(mock_get_featured_products):
-    mock_get_featured_products.return_value = []
-
-    response = client.get("/products/featured")
-    assert response.status_code == 200
-    assert isinstance(response.json(), list)
-    assert len(response.json()) == 0
-
-# Data validation
-def test_get_featured_products_invalid_url():
-    response = client.get("/products/invalid")
-    assert response.status_code == 404
+@app.get("/products/search/{keyword}", response_model=List[schemas.Product])
+def search_products(keyword: str, db: Session = Depends(get_db)):
+    if not keyword:
+        raise HTTPException(status_code=400, detail="Invalid keyword provided")
+    products = crud.search_products(db=db, keyword=keyword)
+    return products
 ```
 
-These tests cover:
+Now we can write more comprehensive unit tests:
 
-- Success case: when there are featured products and the API returns them correctly.
-- Error case: when there are no featured products and the API returns a 404 error.
-- Edge case: when there are no products at all and the API returns an empty list.
-- Data validation: when an invalid URL is supplied, the API returns a 404 error.
+```python
+def test_read_featured_products():
+    # Test success case
+    response = client.get("/products/featured?limit=10")
+    assert response.status_code == 200
+    assert "products" in response.json()
+
+    # Test data validation
+    response = client.get("/products/featured?limit=0")
+    assert response.status_code == 400
+    assert "detail" in response.json()
+
+    # Test edge case
+    response = client.get("/products/featured?limit=101")
+    assert response.status_code == 400
+    assert "detail" in response.json()
+
+def test_search_products():
+    # Test success case
+    response = client.get("/products/search/test")
+    assert response.status_code == 200
+    assert "products" in response.json()
+
+    # Test error case
+    response = client.get("/products/search/")
+    assert response.status_code == 404
+
+    # Test data validation
+    response = client.get("/products/search/ ")
+    assert response.status_code == 400
+    assert "detail" in response.json()
+```
+
+These tests cover a variety of situations, including successful requests, requests with invalid data, and edge cases. In a real-world scenario, you would also want to add tests to ensure the correct data is returned by the endpoints, by comparing it to expected results.
